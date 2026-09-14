@@ -1,0 +1,126 @@
+name: Learning GitHub Script - Node.js
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1:
+      # Checkout the repository so files such as
+      # .github/ISSUE_RESPONSES/comment.md exist on the runner.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Step 2:
+      # Read the Markdown response template using Node.js
+      # and use it as the issue comment.
+      - name: Comment on new issue from template
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+
+            const issueBody = fs.readFileSync(
+              '.github/ISSUE_RESPONSES/comment.md',
+              'utf8'
+            );
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: issueBody
+            });
+
+      # Step 3:
+      # If the issue is a bug, add it to the GitHub Project.
+      - name: Add bug issue to project
+        if: >
+          (github.event.action == 'opened' &&
+           contains(github.event.issue.labels.*.name, 'bug')) ||
+          (github.event.action == 'labeled' &&
+           github.event.label.name == 'bug')
+        uses: actions/github-script@v9
+
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+
+          script: |
+            const projectNumber = parseInt(
+              process.env.PROJECT_NUMBER,
+              10
+            );
+
+            if (Number.isNaN(projectNumber)) {
+              throw new Error(
+                `Invalid PROJECT_NUMBER: ${process.env.PROJECT_NUMBER}`
+              );
+            }
+
+            const projectOwner = context.repo.owner;
+
+            console.log(`Project owner: ${projectOwner}`);
+            console.log(`Project number: ${projectNumber}`);
+
+            // Resolve the human-readable project number
+            // to the internal GraphQL node ID.
+            const projectData = await github.graphql(`
+              query($owner: String!, $number: Int!) {
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    title
+                  }
+                }
+              }
+            `, {
+              owner: projectOwner,
+              number: projectNumber
+            });
+
+            const project = projectData.user?.projectV2;
+
+            if (!project) {
+              throw new Error(
+                `Could not find Project #${projectNumber} for user ${projectOwner}`
+              );
+            }
+
+            console.log(`Found project: ${project.title}`);
+            console.log(`GraphQL node ID: ${project.id}`);
+
+            // Add the current issue to the project.
+            const result = await github.graphql(`
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(
+                  input: {
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }
+                ) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `, {
+              projectId: project.id,
+              contentId: context.payload.issue.node_id
+            });
+
+            console.log(
+              `Issue added to project. Project item ID: ${result.addProjectV2ItemById.item.id}`
+            );
