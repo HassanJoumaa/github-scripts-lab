@@ -1,0 +1,56 @@
+name: Learning GitHub Script - Steps
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment on new issue
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "🎉 You've created this issue comment using GitHub Script!!!"
+            });
+
+      - name: Add bug issue to project
+        if: >
+          (github.event.action == 'opened' &&
+           contains(github.event.issue.labels.*.name, 'bug')) ||
+          (github.event.action == 'labeled' &&
+           github.event.label.name == 'bug')
+        uses: actions/github-script@v9
+        env:
+          PROJECT_ID: ${{ vars.PROJECT_ID }}
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            await github.graphql(`
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(
+                  input: {
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }
+                ) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `, {
+              projectId: process.env.PROJECT_ID,
+              contentId: context.payload.issue.node_id
+            });
