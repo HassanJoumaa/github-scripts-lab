@@ -1,4 +1,4 @@
-name: Learning GitHub Script - Steps
+name: Learning GitHub Script
 
 on:
   issues:
@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1:
+      # Add a comment whenever a new issue is opened.
       - name: Comment on new issue
         if: github.event.action == 'opened'
         uses: actions/github-script@v9
@@ -25,6 +27,8 @@ jobs:
               body: "🎉 You've created this issue comment using GitHub Script!!!"
             });
 
+      # Step 2:
+      # If the issue has the "bug" label, add it to the GitHub Project.
       - name: Add bug issue to project
         if: >
           (github.event.action == 'opened' &&
@@ -32,12 +36,64 @@ jobs:
           (github.event.action == 'labeled' &&
            github.event.label.name == 'bug')
         uses: actions/github-script@v9
+
         env:
-          PROJECT_ID: ${{ vars.PROJECT_ID }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+
         with:
           github-token: ${{ secrets.PROJECT_TOKEN }}
+
           script: |
-            await github.graphql(`
+            const projectNumber = parseInt(
+              process.env.PROJECT_NUMBER,
+              10
+            );
+
+            if (Number.isNaN(projectNumber)) {
+              throw new Error(
+                `Invalid PROJECT_NUMBER: ${process.env.PROJECT_NUMBER}`
+              );
+            }
+
+            const projectOwner = context.repo.owner;
+
+            console.log(`Project owner: ${projectOwner}`);
+            console.log(`Project number: ${projectNumber}`);
+
+            // Find the Project V2 GraphQL node ID.
+            //
+            // PROJECT_NUMBER is the human-readable number from a URL such as:
+            // https://github.com/users/HassanJoumaa/projects/4
+            //
+            // But addProjectV2ItemById requires the internal GraphQL
+            // node ID, which looks like PVT_kwHO...
+            const projectData = await github.graphql(`
+              query($owner: String!, $number: Int!) {
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    title
+                  }
+                }
+              }
+            `, {
+              owner: projectOwner,
+              number: projectNumber
+            });
+
+            const project = projectData.user?.projectV2;
+
+            if (!project) {
+              throw new Error(
+                `Could not find Project #${projectNumber} for user ${projectOwner}`
+              );
+            }
+
+            console.log(`Found project: ${project.title}`);
+            console.log(`GraphQL node ID: ${project.id}`);
+
+            // Add the current issue to the project.
+            const result = await github.graphql(`
               mutation($projectId: ID!, $contentId: ID!) {
                 addProjectV2ItemById(
                   input: {
@@ -51,6 +107,10 @@ jobs:
                 }
               }
             `, {
-              projectId: process.env.PROJECT_ID,
+              projectId: project.id,
               contentId: context.payload.issue.node_id
             });
+
+            console.log(
+              `Issue added to project. Project item ID: ${result.addProjectV2ItemById.item.id}`
+            );
